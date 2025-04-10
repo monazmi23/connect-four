@@ -4,7 +4,7 @@ import Fireworks from './components/Fireworks';
 
 const ROWS = 6;
 const COLUMNS = 7;
-const MAX_DEPTH = 4;
+const MAX_DEPTH = 10; // Increased from 8 to 10
 
 const createBoard = () => Array(ROWS).fill(null).map(() => Array(COLUMNS).fill(null));
 
@@ -80,50 +80,82 @@ function App() {
     const opponent = player === '🟡' ? '🔴' : '🟡';
     let score = 0;
 
+    // Heavily weight center control
     const centerColumn = board.map(row => row[Math.floor(COLUMNS / 2)]);
     const centerCount = centerColumn.filter(cell => cell === player).length;
-    score += centerCount * 3;
+    score += centerCount * 15;  // Increased weight for center control
 
-    const evaluateLine = (line) => {
+    const evaluateLine = (line, isHorizontal = false) => {
       const playerCount = line.filter(cell => cell === player).length;
       const oppCount = line.filter(cell => cell === opponent).length;
       const emptyCount = line.filter(cell => !cell).length;
 
-      if (playerCount === 4) return 100;
-      if (playerCount === 3 && emptyCount === 1) return 5;
-      if (playerCount === 2 && emptyCount === 2) return 2;
-      if (oppCount === 3 && emptyCount === 1) return -4;
-      return 0;
+      // Immediate threats
+      if (oppCount === 4) return -1000000;  // Opponent win
+      if (playerCount === 4) return 1000000;  // Player win
+      
+      // Critical defensive situations
+      if (oppCount === 3 && emptyCount === 1) return -50000;  // Must block
+      if (oppCount === 2 && emptyCount === 2) {
+        // Check if it's a potential double threat
+        if (isHorizontal) return -8000;  // Horizontal threats are more dangerous
+        return -5000;
+      }
+
+      // Offensive opportunities
+      if (playerCount === 3 && emptyCount === 1) return 15000;
+      if (playerCount === 2 && emptyCount === 2) return 1000;
+
+      // General position evaluation
+      return (playerCount * 10) - (oppCount * 15);
     };
 
-    const lines = [];
-
+    // Evaluate horizontal lines (most important)
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLUMNS - 3; c++) {
-        lines.push([board[r][c], board[r][c+1], board[r][c+2], board[r][c+3]]);
+        const line = [board[r][c], board[r][c+1], board[r][c+2], board[r][c+3]];
+        score += evaluateLine(line, true);
       }
     }
 
+    // Evaluate vertical lines
     for (let r = 0; r < ROWS - 3; r++) {
       for (let c = 0; c < COLUMNS; c++) {
-        lines.push([board[r][c], board[r+1][c], board[r+2][c], board[r+3][c]]);
+        const line = [board[r][c], board[r+1][c], board[r+2][c], board[r+3][c]];
+        score += evaluateLine(line);
       }
     }
 
+    // Evaluate diagonal lines
     for (let r = 0; r < ROWS - 3; r++) {
       for (let c = 0; c < COLUMNS - 3; c++) {
-        lines.push([board[r][c], board[r+1][c+1], board[r+2][c+2], board[r+3][c+3]]);
+        const line1 = [board[r][c], board[r+1][c+1], board[r+2][c+2], board[r+3][c+3]];
+        score += evaluateLine(line1);
       }
     }
 
     for (let r = 3; r < ROWS; r++) {
       for (let c = 0; c < COLUMNS - 3; c++) {
-        lines.push([board[r][c], board[r-1][c+1], board[r-2][c+2], board[r-3][c+3]]);
+        const line = [board[r][c], board[r-1][c+1], board[r-2][c+2], board[r-3][c+3]];
+        score += evaluateLine(line);
       }
     }
 
-    for (const line of lines) {
-      score += evaluateLine(line);
+    // Evaluate potential threats
+    for (let c = 0; c < COLUMNS; c++) {
+      for (let r = ROWS - 1; r >= 0; r--) {
+        if (!board[r][c]) {
+          // Simulate dropping a piece here
+          const tempBoard = board.map(row => [...row]);
+          tempBoard[r][c] = opponent;
+          
+          // Check if this creates a threat
+          if (checkWinAt(tempBoard, r, c, opponent)) {
+            score -= 20000;  // Heavily penalize allowing opponent threats
+          }
+          break;
+        }
+      }
     }
 
     return score;
@@ -133,21 +165,38 @@ function App() {
     return winner || getValidColumns(board).length === 0;
   };
 
-  const minimax = (board, depth, alpha, beta, maximizingPlayer) => {
+  const minimax = (board, depth, alpha, beta, maximizingPlayer, isRoot = true) => {
     const validColumns = getValidColumns(board);
-    const isOver = isTerminal(board) || depth === 0;
+    
+    if (isRoot) {
+      // Check for immediate win
+      const winningMove = findWinningMove('🟡');
+      if (winningMove !== null) return [winningMove, 1000000];
+      
+      // Check for immediate block
+      const blockingMove = findWinningMove('🔴');
+      if (blockingMove !== null) return [blockingMove, 500000];
+    }
 
-    if (isOver) {
+    if (depth === 0 || validColumns.length === 0) {
       return [null, evaluateBoard(board, '🟡')];
     }
 
-    let bestCol = validColumns[0];
+    // Sort moves for better pruning
+    const moves = validColumns.map(col => {
+      const [newBoard] = simulateDrop(board, col, maximizingPlayer ? '🟡' : '🔴');
+      const score = evaluateBoard(newBoard, '🟡');
+      return { col, score };
+    });
 
+    moves.sort((a, b) => maximizingPlayer ? b.score - a.score : a.score - b.score);
+
+    let bestCol = moves[0].col;
     if (maximizingPlayer) {
       let value = -Infinity;
-      for (const col of validColumns) {
+      for (const {col} of moves) {
         const [newBoard] = simulateDrop(board, col, '🟡');
-        const [, newScore] = minimax(newBoard, depth - 1, alpha, beta, false);
+        const [, newScore] = minimax(newBoard, depth - 1, alpha, beta, false, false);
         if (newScore > value) {
           value = newScore;
           bestCol = col;
@@ -158,9 +207,9 @@ function App() {
       return [bestCol, value];
     } else {
       let value = Infinity;
-      for (const col of validColumns) {
+      for (const {col} of moves) {
         const [newBoard] = simulateDrop(board, col, '🔴');
-        const [, newScore] = minimax(newBoard, depth - 1, alpha, beta, true);
+        const [, newScore] = minimax(newBoard, depth - 1, alpha, beta, true, false);
         if (newScore < value) {
           value = newScore;
           bestCol = col;
@@ -173,13 +222,39 @@ function App() {
   };
 
   const findWinningMove = (player) => {
+    // First check for immediate wins
+    for (const col of getValidColumns(board)) {
+      const [tempBoard, row] = simulateDrop(board, col, player);
+      if (row >= 0 && checkWinAt(tempBoard, row, col, player)) {
+        return col;
+      }
+    }
+
+    // Then check for opponent's winning moves to block
+    const opponent = player === '🔴' ? '🟡' : '🔴';
+    for (const col of getValidColumns(board)) {
+      const [tempBoard, row] = simulateDrop(board, col, opponent);
+      if (row >= 0 && checkWinAt(tempBoard, row, col, opponent)) {
+        return col;
+      }
+    }
+
+    // Check for double threats
     for (const col of getValidColumns(board)) {
       const [tempBoard, row] = simulateDrop(board, col, player);
       if (row >= 0) {
-        const tempWinner = checkWinAt(tempBoard, row, col, player);
-        if (tempWinner) return col;
+        let threatCount = 0;
+        // Check each possible next move
+        for (let nextCol = 0; nextCol < COLUMNS; nextCol++) {
+          const [nextBoard, nextRow] = simulateDrop(tempBoard, nextCol, player);
+          if (nextRow >= 0 && checkWinAt(nextBoard, nextRow, nextCol, player)) {
+            threatCount++;
+            if (threatCount > 1) return col; // Found a double threat
+          }
+        }
       }
     }
+
     return null;
   };
 
@@ -218,8 +293,9 @@ function App() {
     } else if (difficulty === 'medium') {
       chosenCol = findWinningMove('🟡') ?? findWinningMove('🔴') ?? validCols[Math.floor(Math.random() * validCols.length)];
     } else {
+      // Hard mode - use enhanced minimax
       const [bestCol] = minimax(board, MAX_DEPTH, -Infinity, Infinity, true);
-      chosenCol = bestCol ?? validCols[Math.floor(Math.random() * validCols.length)];
+      chosenCol = bestCol;
     }
 
     if (chosenCol !== null) {
