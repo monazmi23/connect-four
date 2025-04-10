@@ -52,6 +52,10 @@ A modern implementation of the classic Connect Four game built with React. Play 
 
 MIT License - feel free to use this code for your own projects
 
+## Link to play ONLINE
+
+https://monazmi23.github.io/connect-four
+
 ## Author
 
 Blank1
